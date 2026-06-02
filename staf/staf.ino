@@ -24,8 +24,8 @@
  * KORT drukken kiest een kleur (lamp gaat aan en "ademt" zacht en
  * onregelmatig):
  *   - rood  1x          -> ROOD
- *   - blauw 1x          -> GROEN
- *   - blauw 2x (<1,5 s) -> BLAUW
+ *   - blauw 1x          -> meteen GROEN
+ *   - blauw 2x (<1,5 s) -> eerst kort groen, dan door naar BLAUW
  *   - wit   1x          -> WIT
  * Twee knoppen samen (overlappend, starts binnen 1 s) mengt:
  *   - rood + blauw      -> PAARS
@@ -57,9 +57,10 @@
 
 // ---- Tijden ----------------------------------------------------------------
 #define DEBOUNCE_MS      25      // ontdender
-#define LANG_DREMPEL_MS  600     // >= dit ingedrukt = "lang vasthouden"
+#define LANG_DREMPEL_MS  150     // >= dit ingedrukt = "lang vasthouden" (snelle reactie)
 #define DUBBEL_WINDOW_MS 1500    // 2e tik op blauw moet binnen dit venster
 #define COMBO_WINDOW_MS  1000    // twee knoppen samen: starts binnen dit venster
+#define COMBO_VERS_MS    350     // combo: beide drukken moeten zo "vers" zijn (los van lange-klik)
 #define WIT_VOL_MS       500     // wit vasthouden: hoe lang vol licht voor het uit gaat
 #define ADEM_STAP_MS     12      // tijd per helderheidsstapje (vloeiendheid)
 
@@ -177,7 +178,7 @@ void checkCombo(uint32_t nu) {
     uint8_t a = comboPaar[p][0], b = comboPaar[p][1];
     Knop &ka = knoppen[a], &kb = knoppen[b];
     if (ka.stabiel && kb.stabiel &&
-        (nu - ka.neerMs) < LANG_DREMPEL_MS && (nu - kb.neerMs) < LANG_DREMPEL_MS) {
+        (nu - ka.neerMs) < COMBO_VERS_MS && (nu - kb.neerMs) < COMBO_VERS_MS) {
       uint32_t verschil = (ka.neerMs > kb.neerMs) ? ka.neerMs - kb.neerMs
                                                   : kb.neerMs - ka.neerMs;
       if (verschil <= COMBO_WINDOW_MS) {
@@ -231,18 +232,20 @@ void checkTaps(uint32_t nu) {
     } else if (k.duur < LANG_DREMPEL_MS) { // korte tik
       if (i == ROOD)       kiesKleur(255, 0, 0);
       else if (i == WIT)   kiesKleur(255, 255, 255);
-      else { k.taps++; k.laatsteTapMs = nu; }   // BLAUW: wacht op evt. 2e tik
+      else {                                       // BLAUW
+        if (k.taps == 1 && (nu - k.laatsteTapMs) <= DUBBEL_WINDOW_MS) {
+          kiesKleur(0, 0, 255);   // snelle 2e tik -> door naar blauw
+          k.taps = 0;
+        } else {
+          kiesKleur(0, 255, 0);   // 1e tik -> meteen groen
+          k.taps = 1;
+          k.laatsteTapMs = nu;
+        }
+      }
     }
   }
 
   if (aantalIn() == 0) comboBezig = false;
-
-  // Blauw: 2 tikken = blauw, 1 tik (na venster) = groen.
-  Knop &bl = knoppen[BLAUW];
-  if (bl.taps > 0 && !bl.stabiel) {
-    if (bl.taps >= 2)                              { kiesKleur(0, 0, 255); bl.taps = 0; }
-    else if ((nu - bl.laatsteTapMs) > DUBBEL_WINDOW_MS) { kiesKleur(0, 255, 0); bl.taps = 0; }
-  }
 }
 
 // Kies een kleur. Dezelfde kleur opnieuw kiezen terwijl 'ie aan is -> uit.
