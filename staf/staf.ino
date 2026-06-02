@@ -36,8 +36,8 @@
  * terug naar zacht faden):
  *   - rood vast         -> faden tussen ~85% en 100%; loslaten = snel terug
  *   - blauw vast        -> faden tussen ~20% en 50%; loslaten = snel terug
- *   - wit vast          -> 3 korte flitsen (150 ms aan, 75 ms rust), dan uit
- *                          tot je loslaat; loslaten -> terug naar zacht faden
+ *   - wit vast          -> blijft flitsen (200 ms aan, 150 ms rust) zolang
+ *                          ingedrukt; loslaten -> terug naar zacht faden
  */
 
 #include <Adafruit_NeoPixel.h>
@@ -61,9 +61,8 @@
 #define DUBBEL_WINDOW_MS 1500    // 2e tik op blauw moet binnen dit venster
 #define COMBO_WINDOW_MS  1000    // twee knoppen samen: starts binnen dit venster
 #define COMBO_VERS_MS    350     // combo: beide drukken moeten zo "vers" zijn (los van lange-klik)
-#define WIT_FLITS_AAN_MS 150     // wit vasthouden: duur van elke flits
-#define WIT_FLITS_UIT_MS 75      // wit vasthouden: rust tussen de flitsen
-#define WIT_FLITS_AANTAL 3       // wit vasthouden: aantal flitsen
+#define WIT_FLITS_AAN_MS 200     // wit vasthouden: duur van elke flits
+#define WIT_FLITS_UIT_MS 150     // wit vasthouden: rust tussen de flitsen
 #define ADEM_STAP_MS     12      // tijd per helderheidsstapje (vloeiendheid)
 
 // ---- Felheidsbereiken {min,max} voor de adembeweging -----------------------
@@ -111,9 +110,9 @@ uint8_t  actR = 255, actG = 0, actB = 0;   // huidige kleur
 uint8_t  lastR = 255, lastG = 0, lastB = 0; // laatst gekozen kleur (voor boost/flits)
 Felheid  felheid  = F_ZACHT;
 bool     comboBezig = false;
-bool     witBezig   = false;   // wit-knop: flits-reeks bezig
-uint8_t  witStap    = 0;       // huidige stap (even = aan, oneven = rust)
-uint32_t witStapEindMs = 0;    // moment waarop de huidige stap eindigt
+bool     witBezig   = false;   // wit-knop: flits-ritme bezig
+bool     witAanFase = false;   // huidige fase: true = aan, false = rust
+uint32_t witStapEindMs = 0;    // moment waarop de huidige fase eindigt
 
 // adembeweging
 uint8_t  ademNu     = 0;
@@ -142,9 +141,9 @@ void loop() {
   ademLus(nu);
 }
 
-// Toon de huidige flits-stap: even stap = vol licht aan, oneven = rust (uit).
-void witToonStap(uint32_t nu) {
-  if (witStap % 2 == 0) {
+// Toon de huidige fase: aan = vol licht, rust = uit; zet de eindtijd.
+void witToonFase(uint32_t nu) {
+  if (witAanFase) {
     toonRGB(actR, actG, actB, VOL_LICHT);
     witStapEindMs = nu + WIT_FLITS_AAN_MS;
   } else {
@@ -153,20 +152,12 @@ void witToonStap(uint32_t nu) {
   }
 }
 
-// Wit vasthouden: reeks van WIT_FLITS_AANTAL flitsen, daarna uit (tot loslaten).
+// Wit vasthouden: blijf aan/rust afwisselen zolang ingedrukt (tot loslaten).
 void checkWitFlits(uint32_t nu) {
   if (!witBezig) return;
   if ((int32_t)(nu - witStapEindMs) < 0) return;
-
-  witStap++;
-  if (witStap >= (uint8_t)(2 * WIT_FLITS_AANTAL - 1)) {   // laatste flits gehad
-    witBezig = false;
-    aan = false;
-    ademNu = 0;
-    toonRGB(0, 0, 0, 0);
-    return;
-  }
-  witToonStap(nu);
+  witAanFase = !witAanFase;
+  witToonFase(nu);
 }
 
 // Ontdender + flank-detectie voor één knop.
@@ -226,8 +217,8 @@ void checkHold(uint32_t nu) {
         if (!aan) herstelLaatste();
         aan = true;
         witBezig = true;
-        witStap = 0;
-        witToonStap(nu);              // start eerste flits
+        witAanFase = true;            // begin met een flits
+        witToonFase(nu);
       }
     }
   }
