@@ -7,7 +7,7 @@
  *   - Wit knopje    : fysiek pin 2  = D3
  *   - Blauw knopje  : fysiek pin 3  = D4   (gaf GROEN licht, op verzoek)
  *   - Rood knopje   : fysiek pin 7  = D2
- *   - NeoPixel data : fysiek pin 6  = D1
+ *   - NeoPixel data : fysiek pin 5  = D0
  *
  * Knoppen zijn naar GND geschakeld en gebruiken de interne pull-up
  * (INPUT_PULLUP): ingedrukt = LOW. Geen extra weerstanden nodig.
@@ -33,7 +33,7 @@
 #define PIN_WIT     3   // fysiek pin 2
 #define PIN_BLAUW   4   // fysiek pin 3  -> groen
 #define PIN_ROOD    2   // fysiek pin 7
-#define PIN_PIXEL   1   // fysiek pin 6
+#define PIN_PIXEL   0   // fysiek pin 5
 
 // ---- Tijden ----------------------------------------------------------------
 #define DEBOUNCE_MS      25     // ontdender
