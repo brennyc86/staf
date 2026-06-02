@@ -36,8 +36,14 @@
  * terug naar zacht faden):
  *   - rood vast         -> faden tussen ~85% en 100%; loslaten = snel terug
  *   - blauw vast        -> faden tussen ~20% en 50%; loslaten = snel terug
- *   - wit vast          -> blijft flitsen (200 ms aan, 150 ms rust) zolang
+ *   - wit vast          -> blijft flitsen (150 ms aan, 300 ms rust) zolang
  *                          ingedrukt; loslaten -> terug naar zacht faden
+ * ALLE DRIE de knoppen samen (binnen 1 s, met overlap, niet tussendoor alles
+ * los) -> WILLEKEURIGE-KLEUREN MODUS: de kleur dwaalt rustig willekeurig rond.
+ *   - nogmaals 3 knoppen samen -> modus uit
+ *   - een gewone kleurtik       -> stapt uit de modus naar die kleur
+ *   - in deze modus: rood/blauw vast boost de kleur die op dat moment aan
+ *     staat; wit vast laat elke flits een andere willekeurige kleur zien.
  */
 
 #include <Adafruit_NeoPixel.h>
@@ -61,9 +67,14 @@
 #define DUBBEL_WINDOW_MS 1500    // 2e tik op blauw moet binnen dit venster
 #define COMBO_WINDOW_MS  1000    // twee knoppen samen: starts binnen dit venster
 #define COMBO_VERS_MS    350     // combo: beide drukken moeten zo "vers" zijn (los van lange-klik)
-#define WIT_FLITS_AAN_MS 200     // wit vasthouden: duur van elke flits
-#define WIT_FLITS_UIT_MS 150     // wit vasthouden: rust tussen de flitsen
+#define WIT_FLITS_AAN_MS 150     // wit vasthouden: duur van elke flits
+#define WIT_FLITS_UIT_MS 300     // wit vasthouden: rust tussen de flitsen
 #define ADEM_STAP_MS     12      // tijd per helderheidsstapje (vloeiendheid)
+
+// ---- Willekeurige-kleuren modus -------------------------------------------
+#define WILLEKEUR_STAP_MS    25    // tempo van het kleur-kruipen (rustig)
+#define WILLEKEUR_DOEL_MIN   2500  // min tijd voor een nieuwe doelkleur
+#define WILLEKEUR_DOEL_EXTRA 2500  // + willekeurig tot dit erbovenop
 
 // ---- Felheidsbereiken {min,max} voor de adembeweging -----------------------
 #define ZACHT_MIN   4
@@ -114,6 +125,18 @@ bool     witBezig   = false;   // wit-knop: flits-ritme bezig
 bool     witAanFase = false;   // huidige fase: true = aan, false = rust
 uint32_t witStapEindMs = 0;    // moment waarop de huidige fase eindigt
 
+// willekeurige-kleuren modus
+bool     willekeurig = false;          // modus actief
+uint8_t  doelR = 0, doelG = 0, doelB = 0; // kleur waar we rustig naartoe kruipen
+uint32_t willekeurDoelMs = 0;          // moment voor een nieuwe doelkleur
+uint32_t willekeurStapMs = 0;          // laatste kleur-kruipstap
+
+// 3-knops gebaar (sessie = vanaf eerste druk tot alles los)
+bool     sessieActief = false;
+uint8_t  sessieGezien = 0;             // bitmasker van knoppen die met overlap zijn gezien
+uint32_t sessieStartMs = 0;
+bool     drieGedaan = false;           // gebaar al getriggerd in deze sessie
+
 // adembeweging
 uint8_t  ademNu     = 0;
 uint8_t  ademDoel   = 0;
@@ -134,16 +157,19 @@ void setup() {
 void loop() {
   uint32_t nu = millis();
   for (uint8_t i = 0; i < 3; i++) leesKnop(i, nu);
+  checkDrieKnops(nu);
   checkCombo(nu);
   checkHold(nu);
   checkWitFlits(nu);
   checkTaps(nu);
+  willekeurigLus(nu);
   ademLus(nu);
 }
 
 // Toon de huidige fase: aan = vol licht, rust = uit; zet de eindtijd.
 void witToonFase(uint32_t nu) {
   if (witAanFase) {
+    if (willekeurig) wiel(random(256), actR, actG, actB);  // elke flits andere kleur
     toonRGB(actR, actG, actB, VOL_LICHT);
     witStapEindMs = nu + WIT_FLITS_AAN_MS;
   } else {
@@ -260,6 +286,7 @@ void checkTaps(uint32_t nu) {
 
 // Kies een kleur. Dezelfde kleur opnieuw kiezen terwijl 'ie aan is -> uit.
 void kiesKleur(uint8_t r, uint8_t g, uint8_t b) {
+  willekeurig = false;   // een bewuste kleurkeuze stapt uit de willekeur-modus
   if (aan && r == actR && g == actG && b == actB) { aan = false; return; }
   actR = r; actG = g; actB = b;
   lastR = r; lastG = g; lastB = b;
@@ -288,6 +315,69 @@ void kiesNieuwDoel() {
   huidigBereik(mn, mx);
   if (mx <= mn) { ademDoel = mn; return; }
   ademDoel = mn + random(mx - mn + 1);   // willekeurig binnen bereik -> onregelmatig
+}
+
+// Kleurenwiel: verzadigde kleur voor positie 0..255 (Adafruit-stijl).
+void wiel(uint8_t pos, uint8_t &r, uint8_t &g, uint8_t &b) {
+  if (pos < 85)        { r = pos * 3;          g = 255 - pos * 3;    b = 0; }
+  else if (pos < 170)  { pos -= 85;  r = 255 - pos * 3; g = 0;       b = pos * 3; }
+  else                 { pos -= 170; r = 0;            g = pos * 3;  b = 255 - pos * 3; }
+}
+
+void kiesWillekeurigDoel() {
+  wiel(random(256), doelR, doelG, doelB);
+}
+
+// Start/stop de willekeurige-kleuren modus (3-knops gebaar).
+void drieKnopsGebaar(uint32_t nu) {
+  willekeurig = !willekeurig;
+  if (willekeurig) {
+    aan = true;
+    felheid = F_ZACHT;
+    wiel(random(256), actR, actG, actB);   // begin op een willekeurige kleur
+    doelR = actR; doelG = actG; doelB = actB;
+    willekeurDoelMs = nu + WILLEKEUR_DOEL_MIN;
+    willekeurStapMs = nu;
+    kiesNieuwDoel();
+  } else {
+    aan = false;
+  }
+}
+
+// Detecteer "alle 3 binnen 1 s, met overlap, niet tussendoor alles los".
+void checkDrieKnops(uint32_t nu) {
+  uint8_t n = aantalIn();
+  if (n == 0) { sessieActief = false; sessieGezien = 0; drieGedaan = false; return; }
+
+  if (!sessieActief) { sessieActief = true; sessieStartMs = nu; sessieGezien = 0; drieGedaan = false; }
+
+  if (n >= 2)   // op dit moment overlappen knoppen -> markeer de ingedrukte
+    for (uint8_t i = 0; i < 3; i++) if (knoppen[i].stabiel) sessieGezien |= (1 << i);
+
+  if (!drieGedaan && sessieGezien == 0x07 && (nu - sessieStartMs) <= COMBO_WINDOW_MS) {
+    drieGedaan = true;
+    for (uint8_t i = 0; i < 3; i++) { knoppen[i].consumed = true; knoppen[i].taps = 0; }
+    comboBezig = true;            // voorkom losse 2-combo's deze sessie
+    drieKnopsGebaar(nu);
+  }
+}
+
+// Willekeurige-kleuren modus: rustig naar steeds nieuwe doelkleuren kruipen.
+void willekeurigLus(uint32_t nu) {
+  if (!willekeurig) return;
+  if (witBezig || knoppen[ROOD].isHold || knoppen[BLAUW].isHold) return;  // boost/flits: kleur bevriezen
+
+  if ((int32_t)(nu - willekeurDoelMs) >= 0) {
+    kiesWillekeurigDoel();
+    willekeurDoelMs = nu + WILLEKEUR_DOEL_MIN + random(WILLEKEUR_DOEL_EXTRA);
+  }
+
+  if ((nu - willekeurStapMs) >= WILLEKEUR_STAP_MS) {
+    willekeurStapMs = nu;
+    if (actR < doelR) actR++; else if (actR > doelR) actR--;
+    if (actG < doelG) actG++; else if (actG > doelG) actG--;
+    if (actB < doelB) actB++; else if (actB > doelB) actB--;
+  }
 }
 
 // Onregelmatige maar vloeiende adembeweging; schrijft naar de NeoPixel.
