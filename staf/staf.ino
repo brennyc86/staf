@@ -25,7 +25,8 @@
  * inschakelen mag de code meteen worden ingevoerd. Een foute knop reset de
  * invoer en blokkeert nieuwe invoer tot er 10 s lang geen knop is ingedrukt.
  * Elke druk in vergrendelde staat geeft een korte zachte witte knippering
- * (150 ms, ~10%) als feedback.
+ * (150 ms, ~10%) als feedback. Na de juiste code knippert het nog 150 ms wit
+ * en gaat dan uit; de eerstvolgende knopdruk is pas een echte opdracht.
  *
  * ── BEDIENING ─────────────────────────────────────────────────────────────
  * KORT drukken kiest een kleur (lamp gaat aan en "ademt" zacht en
@@ -157,6 +158,7 @@ uint32_t willekeurStapMs = 0;          // laatste kleur-kruipstap
 bool     vergrendeld = true;   // start vergrendeld tot de code klopt
 uint8_t  codePos = 0;          // aantal correcte code-stappen tot nu toe
 bool     codeStraf = false;    // na foute knop: invoer geblokkeerd tot 10s stilte
+bool     codeKlaar = false;    // code net goed: ontgrendel zodra de witte knippering klaar is
 uint32_t laatsteDrukMs = 0;    // moment van laatste knopdruk (voor de 10s-straf)
 bool     codeBlink = false;    // feedback-knippering bezig
 uint32_t codeBlinkEindMs = 0;
@@ -263,6 +265,7 @@ uint8_t aantalIn() {
 // Opstartcode invoeren: rood-wit-wit-blauw, eerste knop pas na >=10s rust.
 // Elke druk geeft een korte zachte witte feedback-knippering.
 void codeInvoer(uint32_t nu) {
+  if (codeKlaar) return;                       // code al goed; wacht tot de knippering uit is
   for (uint8_t i = 0; i < 3; i++) {
     if (!knoppen[i].justDown) continue;
 
@@ -281,11 +284,9 @@ void codeInvoer(uint32_t nu) {
       else              codeStraf = true;                  // foute eerste knop -> 10s straf
     } else if (i == code[codePos]) {
       codePos++;
-      if (codePos >= CODE_LENGTE) {                        // ontgrendeld
-        vergrendeld = false;
+      if (codePos >= CODE_LENGTE) {                        // code goed: knippering nog laten aflopen
         codePos = 0;
-        codeBlink = false;
-        toonRGB(0, 0, 0, 0);
+        codeKlaar = true;                                  // ontgrendelen gebeurt in codeBlinkLus
       }
     } else {
       codePos = 0;                                         // fout -> opnieuw, met 10s straf
@@ -298,6 +299,12 @@ void codeBlinkLus(uint32_t nu) {
   if (codeBlink && (int32_t)(nu - codeBlinkEindMs) >= 0) {
     codeBlink = false;
     toonRGB(0, 0, 0, 0);
+    if (codeKlaar) {                 // wachtwoord net afgerond -> nu pas ontgrendelen
+      vergrendeld = false;
+      codeKlaar = false;
+      // knop(pen) die nu nog ingedrukt zijn niet als opdracht laten tellen
+      for (uint8_t i = 0; i < 3; i++) if (knoppen[i].stabiel) knoppen[i].consumed = true;
+    }
   }
 }
 
