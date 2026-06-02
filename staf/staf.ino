@@ -32,11 +32,11 @@
  *   - blauw + wit       -> GEEL
  *   - rood + wit        -> ORANJE
  * Nogmaals dezelfde kleur/combo kort drukken -> UIT (toggle).
- * LANG vasthouden = tijdelijke felheid in de HUIDIGE kleur:
- *   - rood vast         -> heel fel faden zolang ingedrukt
- *   - blauw vast        -> wat minder fel faden zolang ingedrukt
- *   - loslaten          -> terug naar zacht faden
- *   - wit vast          -> 1 korte felle flits en daarna uit
+ * LANG vasthouden = tijdelijke felheid in de HUIDIGE kleur (loslaten ->
+ * terug naar zacht faden):
+ *   - rood vast         -> faden tussen ~85% en 100%
+ *   - blauw vast        -> faden tussen ~20% en 50%
+ *   - wit vast          -> vol licht (100%) zolang ingedrukt
  */
 
 #include <Adafruit_NeoPixel.h>
@@ -59,18 +59,18 @@
 #define LANG_DREMPEL_MS  600     // >= dit ingedrukt = "lang vasthouden"
 #define DUBBEL_WINDOW_MS 1500    // 2e tik op blauw moet binnen dit venster
 #define COMBO_WINDOW_MS  1000    // twee knoppen samen: starts binnen dit venster
-#define WIT_FLITS_MS     140     // duur van de witte-knop flits
 #define ADEM_STAP_MS     12      // tijd per helderheidsstapje (vloeiendheid)
 
 // ---- Felheidsbereiken {min,max} voor de adembeweging -----------------------
 #define ZACHT_MIN   4
 #define ZACHT_MAX   40
-#define MIDDEN_MIN  70
-#define MIDDEN_MAX  160
-#define HOOG_MIN    170
-#define HOOG_MAX    255
+#define BLAUW_MIN   51    // ~20% van 255 (blauw vasthouden)
+#define BLAUW_MAX   128   // ~50%
+#define ROOD_MIN    217   // ~85% van 255 (rood vasthouden)
+#define ROOD_MAX    255   // 100%
+#define VOL_LICHT   255   // 100% vast (wit vasthouden)
 
-enum Felheid { F_ZACHT, F_MIDDEN, F_HOOG };
+enum Felheid { F_ZACHT, F_BLAUW, F_ROOD, F_VOL };
 
 Adafruit_NeoPixel pixel(1, PIN_PIXEL, PIXEL_VOLGORDE);
 
@@ -184,9 +184,9 @@ void checkHold(uint32_t nu) {
     if (k.stabiel && !k.consumed && !k.isHold && (nu - k.neerMs) >= LANG_DREMPEL_MS) {
       k.isHold = true;
       k.taps   = 0;
-      if (i == ROOD)       { if (!aan) herstelLaatste(); felheid = F_HOOG;   kiesNieuwDoel(); }
-      else if (i == BLAUW) { if (!aan) herstelLaatste(); felheid = F_MIDDEN; kiesNieuwDoel(); }
-      else                 { witFlits(); }   // WIT
+      if (i == ROOD)       { if (!aan) herstelLaatste(); felheid = F_ROOD;  kiesNieuwDoel(); }
+      else if (i == BLAUW) { if (!aan) herstelLaatste(); felheid = F_BLAUW; kiesNieuwDoel(); }
+      else                 { if (!aan) herstelLaatste(); felheid = F_VOL;   kiesNieuwDoel(); }  // WIT
     }
   }
 }
@@ -201,7 +201,7 @@ void checkTaps(uint32_t nu) {
       k.consumed = false;
     } else if (k.isHold) {                // einde van een lang-vasthouden
       k.isHold = false;
-      if (i == ROOD || i == BLAUW) { felheid = F_ZACHT; kiesNieuwDoel(); }
+      felheid = F_ZACHT; kiesNieuwDoel();
     } else if (k.duur < LANG_DREMPEL_MS) { // korte tik
       if (i == ROOD)       kiesKleur(255, 0, 0);
       else if (i == WIT)   kiesKleur(255, 255, 255);
@@ -235,23 +235,13 @@ void herstelLaatste() {
   aan = true;
 }
 
-// Eén korte felle flits in de huidige kleur, daarna uit.
-void witFlits() {
-  if (!aan) { actR = lastR; actG = lastG; actB = lastB; }
-  toonRGB(actR, actG, actB, 255);
-  delay(WIT_FLITS_MS);
-  toonRGB(0, 0, 0, 0);
-  aan = false;
-  ademNu = 0;
-  ademDoel = 0;
-}
-
 // Het {min,max}-bereik van de huidige felheid.
 void huidigBereik(uint8_t &mn, uint8_t &mx) {
   switch (felheid) {
-    case F_MIDDEN: mn = MIDDEN_MIN; mx = MIDDEN_MAX; break;
-    case F_HOOG:   mn = HOOG_MIN;   mx = HOOG_MAX;   break;
-    default:       mn = ZACHT_MIN;  mx = ZACHT_MAX;  break;
+    case F_BLAUW: mn = BLAUW_MIN; mx = BLAUW_MAX; break;
+    case F_ROOD:  mn = ROOD_MIN;  mx = ROOD_MAX;  break;
+    case F_VOL:   mn = VOL_LICHT; mx = VOL_LICHT; break;
+    default:      mn = ZACHT_MIN; mx = ZACHT_MAX; break;
   }
 }
 
