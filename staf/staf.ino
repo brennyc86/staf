@@ -21,10 +21,11 @@
  * "Bootloader branden". Op 1 MHz werkt de NeoPixel NIET betrouwbaar.
  *
  * ── OPSTARTCODE (vergrendeling) ────────────────────────────────────────────
- * Bij opstart is de staf vergrendeld. Code = ROOD, WIT, WIT, BLAUW. De eerste
- * knop telt pas na minstens 10 s zonder knopdruk; een foute druk reset de
- * invoer (en dus weer 10 s rust nodig). Elke druk in vergrendelde staat geeft
- * een korte zachte witte knippering (150 ms, ~10%) als feedback.
+ * Bij opstart is de staf vergrendeld. Code = ROOD, WIT, WIT, BLAUW. Direct na
+ * inschakelen mag de code meteen worden ingevoerd. Een foute knop reset de
+ * invoer en blokkeert nieuwe invoer tot er 10 s lang geen knop is ingedrukt.
+ * Elke druk in vergrendelde staat geeft een korte zachte witte knippering
+ * (150 ms, ~10%) als feedback.
  *
  * ── BEDIENING ─────────────────────────────────────────────────────────────
  * KORT drukken kiest een kleur (lamp gaat aan en "ademt" zacht en
@@ -155,7 +156,8 @@ uint32_t willekeurStapMs = 0;          // laatste kleur-kruipstap
 // opstartcode / vergrendeling
 bool     vergrendeld = true;   // start vergrendeld tot de code klopt
 uint8_t  codePos = 0;          // aantal correcte code-stappen tot nu toe
-uint32_t laatsteDrukMs = 0;    // moment van laatste knopdruk (voor de 10s-rust)
+bool     codeStraf = false;    // na foute knop: invoer geblokkeerd tot 10s stilte
+uint32_t laatsteDrukMs = 0;    // moment van laatste knopdruk (voor de 10s-straf)
 bool     codeBlink = false;    // feedback-knippering bezig
 uint32_t codeBlinkEindMs = 0;
 
@@ -268,11 +270,15 @@ void codeInvoer(uint32_t nu) {
     codeBlinkEindMs = nu + CODE_BLINK_MS;
     toonRGB(255, 255, 255, CODE_BLINK_HELDER);
 
-    bool gerust = (nu - laatsteDrukMs) >= CODE_IDLE_MS;   // lang genoeg niks gedaan?
+    uint32_t gap = nu - laatsteDrukMs;                     // rust sinds vorige druk
     laatsteDrukMs = nu;
+    if (codeStraf && gap >= CODE_IDLE_MS) codeStraf = false; // 10s stilte -> straf voorbij
+
+    if (codeStraf) continue;                               // straf actief: nog niks invoeren (wel feedback)
 
     if (codePos == 0) {
-      codePos = (gerust && i == code[0]) ? 1 : 0;          // start alleen na rust + juiste 1e knop
+      if (i == code[0]) codePos = 1;                       // juiste start (mag direct na opstart)
+      else              codeStraf = true;                  // foute eerste knop -> 10s straf
     } else if (i == code[codePos]) {
       codePos++;
       if (codePos >= CODE_LENGTE) {                        // ontgrendeld
@@ -282,7 +288,8 @@ void codeInvoer(uint32_t nu) {
         toonRGB(0, 0, 0, 0);
       }
     } else {
-      codePos = 0;                                         // fout -> opnieuw (weer 10s rust nodig)
+      codePos = 0;                                         // fout -> opnieuw, met 10s straf
+      codeStraf = true;
     }
   }
 }
