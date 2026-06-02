@@ -43,7 +43,9 @@
  *   - rood vast         -> faden tussen ~85% en 100%; loslaten = snel terug
  *   - blauw vast        -> faden tussen ~20% en 50%; loslaten = snel terug
  *   - wit vast          -> blijft flitsen (150 ms aan, 300 ms rust) zolang
- *                          ingedrukt; loslaten -> terug naar zacht faden
+ *                          ingedrukt; loslaten -> terug naar zacht faden.
+ *                          Tijdens vasthouden: blauw tikken = langere rust,
+ *                          rood tikken = kortere rust (live ritme regelen).
  * ALLE DRIE de knoppen samen (binnen 1 s, met overlap, niet tussendoor alles
  * los) -> WILLEKEURIGE-KLEUREN MODUS: de kleur dwaalt rustig willekeurig rond.
  *   - nogmaals 3 knoppen samen -> modus uit
@@ -74,7 +76,10 @@
 #define COMBO_WINDOW_MS  1000    // twee knoppen samen: starts binnen dit venster
 #define COMBO_VERS_MS    350     // combo: beide drukken moeten zo "vers" zijn (los van lange-klik)
 #define WIT_FLITS_AAN_MS 150     // wit vasthouden: duur van elke flits
-#define WIT_FLITS_UIT_MS 300     // wit vasthouden: rust tussen de flitsen
+#define WIT_FLITS_UIT_MS 300     // wit vasthouden: rust tussen de flitsen (startwaarde)
+#define WIT_RUST_STAP    50      // wit vasthouden: stap waarmee blauw/rood de rust aanpast
+#define WIT_RUST_MIN     50      // kortste rust (rood verkort tot hier)
+#define WIT_RUST_MAX     1500    // langste rust (blauw verlengt tot hier)
 #define ADEM_STAP_MS     12      // tijd per helderheidsstapje (vloeiendheid)
 
 // ---- Willekeurige-kleuren modus -------------------------------------------
@@ -139,6 +144,7 @@ bool     comboBezig = false;
 bool     witBezig   = false;   // wit-knop: flits-ritme bezig
 bool     witAanFase = false;   // huidige fase: true = aan, false = rust
 uint32_t witStapEindMs = 0;    // moment waarop de huidige fase eindigt
+uint16_t witRust    = WIT_FLITS_UIT_MS;  // actuele rust tussen flitsen (blauw/rood passen live aan)
 
 // willekeurige-kleuren modus
 bool     willekeurig = false;          // modus actief
@@ -186,6 +192,7 @@ void loop() {
     return;
   }
 
+  witWachtAanpassen(nu);   // blauw/rood passen tijdens wit-flitsen de rust aan
   checkDrieKnops(nu);
   checkCombo(nu);
   checkHold(nu);
@@ -193,6 +200,20 @@ void loop() {
   checkTaps(nu);
   willekeurigLus(nu);
   ademLus(nu);
+}
+
+// Tijdens wit vasthouden: blauw verlengt de rust, rood verkort 'm.
+void witWachtAanpassen(uint32_t nu) {
+  if (!witBezig) return;
+  if (knoppen[BLAUW].justDown) {
+    witRust += WIT_RUST_STAP;
+    if (witRust > WIT_RUST_MAX) witRust = WIT_RUST_MAX;
+    knoppen[BLAUW].consumed = true;       // geen combo/tik van deze druk
+  }
+  if (knoppen[ROOD].justDown) {
+    witRust = (witRust >= WIT_RUST_MIN + WIT_RUST_STAP) ? witRust - WIT_RUST_STAP : WIT_RUST_MIN;
+    knoppen[ROOD].consumed = true;
+  }
 }
 
 // Toon de huidige fase: aan = vol licht, rust = uit; zet de eindtijd.
@@ -203,7 +224,7 @@ void witToonFase(uint32_t nu) {
     witStapEindMs = nu + WIT_FLITS_AAN_MS;
   } else {
     toonRGB(0, 0, 0, 0);
-    witStapEindMs = nu + WIT_FLITS_UIT_MS;
+    witStapEindMs = nu + witRust;
   }
 }
 
@@ -275,7 +296,7 @@ void codeBlinkLus(uint32_t nu) {
 
 // Twee knoppen die kort samen ingedrukt staan -> mengkleur.
 void checkCombo(uint32_t nu) {
-  if (comboBezig) return;
+  if (comboBezig || witBezig) return;   // niet tijdens wit-flitsen (blauw/rood regelen dan de rust)
   for (uint8_t p = 0; p < 3; p++) {
     uint8_t a = comboPaar[p][0], b = comboPaar[p][1];
     Knop &ka = knoppen[a], &kb = knoppen[b];
@@ -309,6 +330,7 @@ void checkHold(uint32_t nu) {
         aan = true;
         witBezig = true;
         witAanFase = true;            // begin met een flits
+        witRust = WIT_FLITS_UIT_MS;   // elke nieuwe hold start op de standaard-rust
         witToonFase(nu);
       }
     }
@@ -411,6 +433,7 @@ void drieKnopsGebaar(uint32_t nu) {
 
 // Detecteer "alle 3 binnen 1 s, met overlap, niet tussendoor alles los".
 void checkDrieKnops(uint32_t nu) {
+  if (witBezig) return;                 // niet tijdens wit-flitsen (blauw/rood regelen dan de rust)
   uint8_t n = aantalIn();
   if (n == 0) { sessieActief = false; sessieGezien = 0; drieGedaan = false; return; }
 
