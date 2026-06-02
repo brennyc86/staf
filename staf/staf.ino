@@ -96,7 +96,26 @@ void setup() {
   pixel.begin();
   pixel.clear();
   pixel.show();
+  startFlits();              // visuele zelftest: rood -> groen -> wit
   randomSeed(analogRead(0));
+}
+
+// Korte kleurtest bij opstarten. Bevestigt dat de WS2812 werkt en dat de
+// kleurvolgorde (GRB) klopt: je hoort rood, dan groen, dan wit te zien.
+void startFlits() {
+  const uint8_t test[3][3] = {
+    {255,   0,   0},   // rood
+    {  0, 255,   0},   // groen
+    {255, 255, 255},   // wit
+  };
+  for (uint8_t i = 0; i < 3; i++) {
+    pixel.setPixelColor(0, pixel.Color(test[i][0], test[i][1], test[i][2]));
+    pixel.show();
+    delay(250);
+    pixel.clear();
+    pixel.show();
+    delay(120);
+  }
 }
 
 void loop() {
