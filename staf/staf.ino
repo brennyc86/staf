@@ -34,9 +34,10 @@
  * Nogmaals dezelfde kleur/combo kort drukken -> UIT (toggle).
  * LANG vasthouden = tijdelijke felheid in de HUIDIGE kleur (loslaten ->
  * terug naar zacht faden):
- *   - rood vast         -> faden tussen ~85% en 100%
- *   - blauw vast        -> faden tussen ~20% en 50%
- *   - wit vast          -> vol licht (100%) zolang ingedrukt
+ *   - rood vast         -> faden tussen ~85% en 100%; loslaten = snel terug
+ *   - blauw vast        -> faden tussen ~20% en 50%; loslaten = snel terug
+ *   - wit vast          -> direct vol licht (100%), ~0,5 s, dan uit tot je
+ *                          loslaat; loslaten -> terug naar zacht faden
  */
 
 #include <Adafruit_NeoPixel.h>
@@ -59,6 +60,7 @@
 #define LANG_DREMPEL_MS  600     // >= dit ingedrukt = "lang vasthouden"
 #define DUBBEL_WINDOW_MS 1500    // 2e tik op blauw moet binnen dit venster
 #define COMBO_WINDOW_MS  1000    // twee knoppen samen: starts binnen dit venster
+#define WIT_VOL_MS       500     // wit vasthouden: hoe lang vol licht voor het uit gaat
 #define ADEM_STAP_MS     12      // tijd per helderheidsstapje (vloeiendheid)
 
 // ---- Felheidsbereiken {min,max} voor de adembeweging -----------------------
@@ -70,7 +72,7 @@
 #define ROOD_MAX    255   // 100%
 #define VOL_LICHT   255   // 100% vast (wit vasthouden)
 
-enum Felheid { F_ZACHT, F_BLAUW, F_ROOD, F_VOL };
+enum Felheid { F_ZACHT, F_BLAUW, F_ROOD };
 
 Adafruit_NeoPixel pixel(1, PIN_PIXEL, PIXEL_VOLGORDE);
 
@@ -106,6 +108,8 @@ uint8_t  actR = 255, actG = 0, actB = 0;   // huidige kleur
 uint8_t  lastR = 255, lastG = 0, lastB = 0; // laatst gekozen kleur (voor boost/flits)
 Felheid  felheid  = F_ZACHT;
 bool     comboBezig = false;
+bool     witVol     = false;   // wit-knop: vol-licht puls bezig
+uint32_t witVolEindMs = 0;     // moment waarop die puls uit gaat
 
 // adembeweging
 uint8_t  ademNu     = 0;
@@ -129,8 +133,19 @@ void loop() {
   for (uint8_t i = 0; i < 3; i++) leesKnop(i, nu);
   checkCombo(nu);
   checkHold(nu);
+  checkWitVol(nu);
   checkTaps(nu);
   ademLus(nu);
+}
+
+// Wit vasthouden: na de vol-licht puls knipt 'ie uit (en blijft uit tot los).
+void checkWitVol(uint32_t nu) {
+  if (witVol && (int32_t)(nu - witVolEindMs) >= 0) {
+    witVol = false;
+    aan = false;
+    ademNu = 0;
+    schrijfPixel();   // direct uit, geen uitdimmen
+  }
 }
 
 // Ontdender + flank-detectie voor één knop.
@@ -186,7 +201,14 @@ void checkHold(uint32_t nu) {
       k.taps   = 0;
       if (i == ROOD)       { if (!aan) herstelLaatste(); felheid = F_ROOD;  kiesNieuwDoel(); }
       else if (i == BLAUW) { if (!aan) herstelLaatste(); felheid = F_BLAUW; kiesNieuwDoel(); }
-      else                 { if (!aan) herstelLaatste(); felheid = F_VOL;   kiesNieuwDoel(); }  // WIT
+      else {                                                              // WIT
+        if (!aan) herstelLaatste();
+        ademNu = VOL_LICHT;            // direct (instant) naar maximaal
+        aan = true;
+        witVol = true;
+        witVolEindMs = nu + WIT_VOL_MS;
+        schrijfPixel();               // meteen tonen
+      }
     }
   }
 }
@@ -201,7 +223,11 @@ void checkTaps(uint32_t nu) {
       k.consumed = false;
     } else if (k.isHold) {                // einde van een lang-vasthouden
       k.isHold = false;
-      felheid = F_ZACHT; kiesNieuwDoel();
+      witVol = false;
+      aan = true;                         // hervat (wit kan tijdens de puls uit zijn)
+      felheid = F_ZACHT;
+      ademNu = ZACHT_MAX;                 // meteen snel terug naar lage sterkte
+      kiesNieuwDoel();
     } else if (k.duur < LANG_DREMPEL_MS) { // korte tik
       if (i == ROOD)       kiesKleur(255, 0, 0);
       else if (i == WIT)   kiesKleur(255, 255, 255);
@@ -240,7 +266,6 @@ void huidigBereik(uint8_t &mn, uint8_t &mx) {
   switch (felheid) {
     case F_BLAUW: mn = BLAUW_MIN; mx = BLAUW_MAX; break;
     case F_ROOD:  mn = ROOD_MIN;  mx = ROOD_MAX;  break;
-    case F_VOL:   mn = VOL_LICHT; mx = VOL_LICHT; break;
     default:      mn = ZACHT_MIN; mx = ZACHT_MAX; break;
   }
 }
@@ -254,6 +279,7 @@ void kiesNieuwDoel() {
 
 // Onregelmatige maar vloeiende adembeweging; schrijft naar de NeoPixel.
 void ademLus(uint32_t nu) {
+  if (witVol) return;                    // tijdens vol-licht puls niets faden
   if ((nu - ademVorigMs) < ADEM_STAP_MS) return;
   ademVorigMs = nu;
 
