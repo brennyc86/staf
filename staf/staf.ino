@@ -20,6 +20,12 @@
  * 8 MHz (intern) of 16 MHz (PLL) via Tools -> Clock en daarna eenmalig
  * "Bootloader branden". Op 1 MHz werkt de NeoPixel NIET betrouwbaar.
  *
+ * ── OPSTARTCODE (vergrendeling) ────────────────────────────────────────────
+ * Bij opstart is de staf vergrendeld. Code = ROOD, WIT, WIT, BLAUW. De eerste
+ * knop telt pas na minstens 10 s zonder knopdruk; een foute druk reset de
+ * invoer (en dus weer 10 s rust nodig). Elke druk in vergrendelde staat geeft
+ * een korte zachte witte knippering (150 ms, ~10%) als feedback.
+ *
  * ── BEDIENING ─────────────────────────────────────────────────────────────
  * KORT drukken kiest een kleur (lamp gaat aan en "ademt" zacht en
  * onregelmatig):
@@ -76,6 +82,12 @@
 #define WILLEKEUR_DOEL_MIN   2500  // min tijd voor een nieuwe doelkleur
 #define WILLEKEUR_DOEL_EXTRA 2500  // + willekeurig tot dit erbovenop
 
+// ---- Opstartcode (vergrendeling) ------------------------------------------
+#define CODE_IDLE_MS      10000    // eerst zo lang niks indrukken voor de 1e codeknop telt
+#define CODE_BLINK_MS     150      // duur van de feedback-knippering per druk
+#define CODE_BLINK_HELDER 26       // ~10% wit
+#define CODE_LENGTE       4
+
 // ---- Felheidsbereiken {min,max} voor de adembeweging -----------------------
 #define ZACHT_MIN   4
 #define ZACHT_MAX   40
@@ -115,6 +127,9 @@ Knop knoppen[3] = {
 const uint8_t comboPaar[3][2]  = { {ROOD, BLAUW}, {BLAUW, WIT}, {ROOD, WIT} };
 const uint8_t comboKleur[3][3] = { {170, 0, 255}, {255, 255, 0}, {255, 90, 0} };
 
+// Opstartcode: rood - wit - wit - blauw.
+const uint8_t code[CODE_LENGTE] = { ROOD, WIT, WIT, BLAUW };
+
 // ---- Actieve lichtstaat ----------------------------------------------------
 bool     aan      = false;
 uint8_t  actR = 255, actG = 0, actB = 0;   // huidige kleur
@@ -130,6 +145,13 @@ bool     willekeurig = false;          // modus actief
 uint8_t  doelR = 0, doelG = 0, doelB = 0; // kleur waar we rustig naartoe kruipen
 uint32_t willekeurDoelMs = 0;          // moment voor een nieuwe doelkleur
 uint32_t willekeurStapMs = 0;          // laatste kleur-kruipstap
+
+// opstartcode / vergrendeling
+bool     vergrendeld = true;   // start vergrendeld tot de code klopt
+uint8_t  codePos = 0;          // aantal correcte code-stappen tot nu toe
+uint32_t laatsteDrukMs = 0;    // moment van laatste knopdruk (voor de 10s-rust)
+bool     codeBlink = false;    // feedback-knippering bezig
+uint32_t codeBlinkEindMs = 0;
 
 // 3-knops gebaar (sessie = vanaf eerste druk tot alles los)
 bool     sessieActief = false;
@@ -157,6 +179,13 @@ void setup() {
 void loop() {
   uint32_t nu = millis();
   for (uint8_t i = 0; i < 3; i++) leesKnop(i, nu);
+
+  if (vergrendeld) {                 // functies pas vrij na de juiste opstartcode
+    codeInvoer(nu);
+    codeBlinkLus(nu);
+    return;
+  }
+
   checkDrieKnops(nu);
   checkCombo(nu);
   checkHold(nu);
@@ -206,6 +235,42 @@ uint8_t aantalIn() {
   uint8_t n = 0;
   for (uint8_t i = 0; i < 3; i++) if (knoppen[i].stabiel) n++;
   return n;
+}
+
+// Opstartcode invoeren: rood-wit-wit-blauw, eerste knop pas na >=10s rust.
+// Elke druk geeft een korte zachte witte feedback-knippering.
+void codeInvoer(uint32_t nu) {
+  for (uint8_t i = 0; i < 3; i++) {
+    if (!knoppen[i].justDown) continue;
+
+    codeBlink = true;                          // feedback: 150 ms zacht wit
+    codeBlinkEindMs = nu + CODE_BLINK_MS;
+    toonRGB(255, 255, 255, CODE_BLINK_HELDER);
+
+    bool gerust = (nu - laatsteDrukMs) >= CODE_IDLE_MS;   // lang genoeg niks gedaan?
+    laatsteDrukMs = nu;
+
+    if (codePos == 0) {
+      codePos = (gerust && i == code[0]) ? 1 : 0;          // start alleen na rust + juiste 1e knop
+    } else if (i == code[codePos]) {
+      codePos++;
+      if (codePos >= CODE_LENGTE) {                        // ontgrendeld
+        vergrendeld = false;
+        codePos = 0;
+        codeBlink = false;
+        toonRGB(0, 0, 0, 0);
+      }
+    } else {
+      codePos = 0;                                         // fout -> opnieuw (weer 10s rust nodig)
+    }
+  }
+}
+
+void codeBlinkLus(uint32_t nu) {
+  if (codeBlink && (int32_t)(nu - codeBlinkEindMs) >= 0) {
+    codeBlink = false;
+    toonRGB(0, 0, 0, 0);
+  }
 }
 
 // Twee knoppen die kort samen ingedrukt staan -> mengkleur.
