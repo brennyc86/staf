@@ -42,9 +42,10 @@
  * Nogmaals dezelfde kleur/combo kort drukken -> UIT (toggle).
  * LANG vasthouden:
  *   - rood vast         -> tijdelijk feller (~85-100%); loslaten = terug.
- *   - blauw vast        -> helderheid instellen: tik rood = feller, tik wit =
- *                          zachter. Blijft behouden (ook bij een andere kleur).
- *                          Reset naar standaard na 30 s uit of stroom eraf.
+ *   - blauw vast        -> lamp naar een rustige, vaste 20-50% (los van het
+ *                          niveau). Tegelijk: tik rood = standaard feller, tik
+ *                          wit = standaard zachter (blijft behouden, ook bij een
+ *                          andere kleur; reset na 30 s uit of stroom eraf).
  *   - wit vast          -> blijft flitsen (150 ms aan, 300 ms rust); tik blauw
  *                          = langere rust, tik rood = kortere rust.
  * ALLE DRIE de knoppen samen (binnen 1 s, met overlap, niet tussendoor alles
@@ -96,19 +97,22 @@
 #define CODE_LENGTE       4
 
 // ---- Felheidsbereiken {min,max} voor de adembeweging -----------------------
-#define ZACHT_MIN   4
+#define ZACHT_MIN   4     // standaard (schaalt mee met het helderheidsniveau)
 #define ZACHT_MAX   40
-#define ROOD_MIN    217   // ~85% van 255 (rood vasthouden)
+#define BLAUW_MIN   51    // ~20% van 255 (blauw vasthouden, absoluut)
+#define BLAUW_MAX   128   // ~50%
+#define ROOD_MIN    217   // ~85% van 255 (rood vasthouden, absoluut)
 #define ROOD_MAX    255   // 100%
 #define VOL_LICHT   255   // 100% vast (wit vasthouden)
 
-enum Felheid { F_ZACHT, F_ROOD };
+enum Felheid { F_ZACHT, F_BLAUW, F_ROOD };
 
 // ---- Helderheidsniveau (blauw vasthouden + rood/wit tikken) ----------------
+// Schaalt alléén de standaard (zacht); blauw/rood-vast en de flits zijn absoluut.
 #define HELDER_DEFAULT   100     // standaard niveau (%) — laat huidig gedrag ongewijzigd
-#define HELDER_STAP      30      // stap per tik (rood feller / wit zachter)
-#define HELDER_MIN       20      // donkerste niveau (%)
-#define HELDER_MAX       800     // felste niveau (%) — uitvoer wordt op 255 begrensd
+#define HELDER_STAP      150     // stap per tik (rood feller / wit zachter)
+#define HELDER_MIN       30      // donkerste niveau (%)
+#define HELDER_MAX       700     // felste niveau (%) — uitvoer wordt op 255 begrensd
 #define HELDER_RESET_MS  30000   // na zo lang uit -> terug naar standaard
 
 Adafruit_NeoPixel pixel(1, PIN_PIXEL, PIXEL_VOLGORDE);
@@ -348,8 +352,8 @@ void checkHold(uint32_t nu) {
     if (k.stabiel && !k.consumed && !k.isHold && (nu - k.neerMs) >= LANG_DREMPEL_MS) {
       k.isHold = true;
       k.taps   = 0;
-      if (i == ROOD)       { if (!aan) herstelLaatste(); felheid = F_ROOD; kiesNieuwDoel(); }
-      else if (i == BLAUW) { if (!aan) { herstelLaatste(); kiesNieuwDoel(); } }  // helderheids-modifier
+      if (i == ROOD)       { if (!aan) herstelLaatste(); felheid = F_ROOD;  kiesNieuwDoel(); }
+      else if (i == BLAUW) { if (!aan) herstelLaatste(); felheid = F_BLAUW; kiesNieuwDoel(); }  // 20-50% + helderheids-modifier
       else {                                                              // WIT
         if (!aan) herstelLaatste();
         aan = true;
@@ -416,8 +420,16 @@ void herstelLaatste() {
 // Het {min,max}-bereik van de huidige felheid.
 void huidigBereik(uint8_t &mn, uint8_t &mx) {
   switch (felheid) {
-    case F_ROOD: mn = ROOD_MIN;  mx = ROOD_MAX;  break;
-    default:     mn = ZACHT_MIN; mx = ZACHT_MAX; break;
+    case F_BLAUW: mn = BLAUW_MIN; mx = BLAUW_MAX; break;   // absoluut 20-50%
+    case F_ROOD:  mn = ROOD_MIN;  mx = ROOD_MAX;  break;   // absoluut 85-100%
+    default: {                                              // F_ZACHT: standaard * niveau
+      uint16_t lo = (uint16_t)ZACHT_MIN * helderNiveau / 100;
+      uint16_t hi = (uint16_t)ZACHT_MAX * helderNiveau / 100;
+      if (lo > 255) lo = 255;
+      if (hi > 255) hi = 255;
+      mn = lo; mx = hi;
+      break;
+    }
   }
 }
 
@@ -535,11 +547,8 @@ void schrijfPixel() {
   toonRGB(actR, actG, actB, ademNu);
 }
 
-// Toon een kleur op de pixel, geschaald met helder 0..255 en het niveau.
+// Toon een kleur op de pixel, geschaald met helder 0..255.
 void toonRGB(uint8_t r, uint8_t g, uint8_t b, uint8_t helder) {
-  uint32_t h = (uint32_t)helder * helderNiveau / 100;   // persistent helderheidsniveau
-  if (h > 255) h = 255;
-  helder = (uint8_t)h;
   uint8_t rr = (uint16_t)r * helder / 255;
   uint8_t gg = (uint16_t)g * helder / 255;
   uint8_t bb = (uint16_t)b * helder / 255;
