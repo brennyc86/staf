@@ -40,20 +40,20 @@
  *   - blauw + wit       -> GEEL
  *   - rood + wit        -> ORANJE
  * Nogmaals dezelfde kleur/combo kort drukken -> UIT (toggle).
- * LANG vasthouden = tijdelijke felheid in de HUIDIGE kleur (loslaten ->
- * terug naar zacht faden):
- *   - rood vast         -> faden tussen ~85% en 100%; loslaten = snel terug
- *   - blauw vast        -> faden tussen ~20% en 50%; loslaten = snel terug
- *   - wit vast          -> blijft flitsen (150 ms aan, 300 ms rust) zolang
- *                          ingedrukt; loslaten -> terug naar zacht faden.
- *                          Tijdens vasthouden: blauw tikken = langere rust,
- *                          rood tikken = kortere rust (live ritme regelen).
+ * LANG vasthouden:
+ *   - rood vast         -> tijdelijk feller (~85-100%); loslaten = terug.
+ *   - blauw vast        -> helderheid instellen: tik rood = feller, tik wit =
+ *                          zachter. Blijft behouden (ook bij een andere kleur).
+ *                          Reset naar standaard na 30 s uit of stroom eraf.
+ *   - wit vast          -> blijft flitsen (150 ms aan, 300 ms rust); tik blauw
+ *                          = langere rust, tik rood = kortere rust.
  * ALLE DRIE de knoppen samen (binnen 1 s, met overlap, niet tussendoor alles
  * los) -> WILLEKEURIGE-KLEUREN MODUS: de kleur dwaalt rustig willekeurig rond.
  *   - nogmaals 3 knoppen samen -> modus uit
  *   - een gewone kleurtik       -> stapt uit de modus naar die kleur
- *   - in deze modus: rood/blauw vast boost de kleur die op dat moment aan
- *     staat; wit vast laat elke flits een andere willekeurige kleur zien.
+ *   - blauw vast -> kleuren blijven wisselen (+ helderheid regelen met rood/wit
+ *     tik); rood vast -> kleur bevriest en wordt feller; wit vast -> elke flits
+ *     een andere willekeurige kleur.
  */
 
 #include <Adafruit_NeoPixel.h>
@@ -98,13 +98,18 @@
 // ---- Felheidsbereiken {min,max} voor de adembeweging -----------------------
 #define ZACHT_MIN   4
 #define ZACHT_MAX   40
-#define BLAUW_MIN   51    // ~20% van 255 (blauw vasthouden)
-#define BLAUW_MAX   128   // ~50%
 #define ROOD_MIN    217   // ~85% van 255 (rood vasthouden)
 #define ROOD_MAX    255   // 100%
 #define VOL_LICHT   255   // 100% vast (wit vasthouden)
 
-enum Felheid { F_ZACHT, F_BLAUW, F_ROOD };
+enum Felheid { F_ZACHT, F_ROOD };
+
+// ---- Helderheidsniveau (blauw vasthouden + rood/wit tikken) ----------------
+#define HELDER_DEFAULT   100     // standaard niveau (%) — laat huidig gedrag ongewijzigd
+#define HELDER_STAP      30      // stap per tik (rood feller / wit zachter)
+#define HELDER_MIN       20      // donkerste niveau (%)
+#define HELDER_MAX       800     // felste niveau (%) — uitvoer wordt op 255 begrensd
+#define HELDER_RESET_MS  30000   // na zo lang uit -> terug naar standaard
 
 Adafruit_NeoPixel pixel(1, PIN_PIXEL, PIXEL_VOLGORDE);
 
@@ -169,6 +174,10 @@ uint8_t  sessieGezien = 0;             // bitmasker van knoppen die met overlap 
 uint32_t sessieStartMs = 0;
 bool     drieGedaan = false;           // gebaar al getriggerd in deze sessie
 
+// helderheidsniveau (blijft behouden; reset na 30s uit of stroomonderbreking)
+int      helderNiveau = HELDER_DEFAULT;
+uint32_t uitSindsMs   = 0;
+
 // adembeweging
 uint8_t  ademNu     = 0;
 uint8_t  ademDoel   = 0;
@@ -200,10 +209,12 @@ void loop() {
   checkDrieKnops(nu);
   checkCombo(nu);
   checkHold(nu);
+  helderheidAanpassen();   // blauw vast + rood/wit tik = helderheidsniveau regelen
   checkWitFlits(nu);
   checkTaps(nu);
   willekeurigLus(nu);
   ademLus(nu);
+  helderheidReset(nu);     // na 30 s uit -> terug naar standaard
 }
 
 // Tijdens wit vasthouden: blauw verlengt de rust, rood verkort 'm.
@@ -310,7 +321,7 @@ void codeBlinkLus(uint32_t nu) {
 
 // Twee knoppen die kort samen ingedrukt staan -> mengkleur.
 void checkCombo(uint32_t nu) {
-  if (comboBezig || witBezig) return;   // niet tijdens wit-flitsen (blauw/rood regelen dan de rust)
+  if (comboBezig || witBezig || knoppen[BLAUW].isHold) return;   // niet tijdens wit-flits of blauw-helderheidsmodus
   for (uint8_t p = 0; p < 3; p++) {
     uint8_t a = comboPaar[p][0], b = comboPaar[p][1];
     Knop &ka = knoppen[a], &kb = knoppen[b];
@@ -337,8 +348,8 @@ void checkHold(uint32_t nu) {
     if (k.stabiel && !k.consumed && !k.isHold && (nu - k.neerMs) >= LANG_DREMPEL_MS) {
       k.isHold = true;
       k.taps   = 0;
-      if (i == ROOD)       { if (!aan) herstelLaatste(); felheid = F_ROOD;  kiesNieuwDoel(); }
-      else if (i == BLAUW) { if (!aan) herstelLaatste(); felheid = F_BLAUW; kiesNieuwDoel(); }
+      if (i == ROOD)       { if (!aan) herstelLaatste(); felheid = F_ROOD; kiesNieuwDoel(); }
+      else if (i == BLAUW) { if (!aan) { herstelLaatste(); kiesNieuwDoel(); } }  // helderheids-modifier
       else {                                                              // WIT
         if (!aan) herstelLaatste();
         aan = true;
@@ -405,9 +416,8 @@ void herstelLaatste() {
 // Het {min,max}-bereik van de huidige felheid.
 void huidigBereik(uint8_t &mn, uint8_t &mx) {
   switch (felheid) {
-    case F_BLAUW: mn = BLAUW_MIN; mx = BLAUW_MAX; break;
-    case F_ROOD:  mn = ROOD_MIN;  mx = ROOD_MAX;  break;
-    default:      mn = ZACHT_MIN; mx = ZACHT_MAX; break;
+    case F_ROOD: mn = ROOD_MIN;  mx = ROOD_MAX;  break;
+    default:     mn = ZACHT_MIN; mx = ZACHT_MAX; break;
   }
 }
 
@@ -447,7 +457,7 @@ void drieKnopsGebaar(uint32_t nu) {
 
 // Detecteer "alle 3 binnen 1 s, met overlap, niet tussendoor alles los".
 void checkDrieKnops(uint32_t nu) {
-  if (witBezig) return;                 // niet tijdens wit-flitsen (blauw/rood regelen dan de rust)
+  if (witBezig || knoppen[BLAUW].isHold) return;   // niet tijdens wit-flits of blauw-helderheidsmodus
   uint8_t n = aantalIn();
   if (n == 0) { sessieActief = false; sessieGezien = 0; drieGedaan = false; return; }
 
@@ -467,7 +477,7 @@ void checkDrieKnops(uint32_t nu) {
 // Willekeurige-kleuren modus: rustig naar steeds nieuwe doelkleuren kruipen.
 void willekeurigLus(uint32_t nu) {
   if (!willekeurig) return;
-  if (witBezig || knoppen[ROOD].isHold || knoppen[BLAUW].isHold) return;  // boost/flits: kleur bevriezen
+  if (witBezig || knoppen[ROOD].isHold) return;  // alleen bevriezen bij rood vast (en wit-flits); blauw vast laat kleuren doorlopen
 
   if ((int32_t)(nu - willekeurDoelMs) >= 0) {
     kiesWillekeurigDoel();
@@ -480,6 +490,27 @@ void willekeurigLus(uint32_t nu) {
     if (actG < doelG) actG++; else if (actG > doelG) actG--;
     if (actB < doelB) actB++; else if (actB > doelB) actB--;
   }
+}
+
+// Blauw vasthouden + rood tik = feller, + wit tik = zachter. Blijft behouden.
+void helderheidAanpassen() {
+  if (!knoppen[BLAUW].isHold) return;
+  if (knoppen[ROOD].justDown) {
+    helderNiveau += HELDER_STAP;
+    if (helderNiveau > HELDER_MAX) helderNiveau = HELDER_MAX;
+    knoppen[ROOD].consumed = true;       // geen combo/tik van deze druk
+  }
+  if (knoppen[WIT].justDown) {
+    helderNiveau -= HELDER_STAP;
+    if (helderNiveau < HELDER_MIN) helderNiveau = HELDER_MIN;
+    knoppen[WIT].consumed = true;
+  }
+}
+
+// Na meer dan 30 s uit (of na stroomonderbreking) terug naar standaard niveau.
+void helderheidReset(uint32_t nu) {
+  if (aan) uitSindsMs = nu;
+  else if ((nu - uitSindsMs) >= HELDER_RESET_MS) helderNiveau = HELDER_DEFAULT;
 }
 
 // Onregelmatige maar vloeiende adembeweging; schrijft naar de NeoPixel.
@@ -504,8 +535,11 @@ void schrijfPixel() {
   toonRGB(actR, actG, actB, ademNu);
 }
 
-// Toon een kleur op de pixel, geschaald met helderheid 0..255.
+// Toon een kleur op de pixel, geschaald met helder 0..255 en het niveau.
 void toonRGB(uint8_t r, uint8_t g, uint8_t b, uint8_t helder) {
+  uint32_t h = (uint32_t)helder * helderNiveau / 100;   // persistent helderheidsniveau
+  if (h > 255) h = 255;
+  helder = (uint8_t)h;
   uint8_t rr = (uint16_t)r * helder / 255;
   uint8_t gg = (uint16_t)g * helder / 255;
   uint8_t bb = (uint16_t)b * helder / 255;
