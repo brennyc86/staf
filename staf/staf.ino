@@ -42,19 +42,21 @@
  * Nogmaals dezelfde kleur/combo kort drukken -> UIT (toggle).
  * LANG vasthouden:
  *   - rood vast         -> tijdelijk feller (~85-100%); loslaten = terug.
- *   - blauw vast        -> lamp naar een rustige, vaste 20-50% (los van het
- *                          niveau). Tegelijk: tik rood = standaard feller, tik
- *                          wit = standaard zachter (blijft behouden, ook bij een
- *                          andere kleur; reset na 30 s uit of stroom eraf).
+ *   - blauw vast        -> rustige, vaste 20-50% (los van het niveau). Houd er
+ *                          ook rood bij = standaard langzaam feller (tot 100%),
+ *                          of wit erbij = langzaam zachter (tot ~1%); de fade
+ *                          loopt zichtbaar mee. De ingestelde standaard blijft
+ *                          behouden (ook bij andere kleur; reset na 30 s uit of
+ *                          stroom eraf).
  *   - wit vast          -> blijft flitsen (150 ms aan, 300 ms rust); tik blauw
  *                          = langere rust, tik rood = kortere rust.
  * ALLE DRIE de knoppen samen (binnen 1 s, met overlap, niet tussendoor alles
  * los) -> WILLEKEURIGE-KLEUREN MODUS: de kleur dwaalt rustig willekeurig rond.
  *   - nogmaals 3 knoppen samen -> modus uit
  *   - een gewone kleurtik       -> stapt uit de modus naar die kleur
- *   - blauw vast -> kleuren blijven wisselen (+ helderheid regelen met rood/wit
- *     tik); rood vast -> kleur bevriest en wordt feller; wit vast -> elke flits
- *     een andere willekeurige kleur.
+ *   - blauw vast -> kleuren blijven wisselen (+ helderheid regelen door rood/wit
+ *     erbij vast te houden); rood vast -> kleur bevriest en wordt feller; wit
+ *     vast -> elke flits een andere willekeurige kleur.
  */
 
 #include <Adafruit_NeoPixel.h>
@@ -107,12 +109,13 @@
 
 enum Felheid { F_ZACHT, F_BLAUW, F_ROOD };
 
-// ---- Helderheidsniveau (blauw vasthouden + rood/wit tikken) ----------------
+// ---- Helderheidsniveau (blauw vasthouden + rood/wit erbij) -----------------
 // Schaalt alléén de standaard (zacht); blauw/rood-vast en de flits zijn absoluut.
 #define HELDER_DEFAULT   100     // standaard niveau (%) — laat huidig gedrag ongewijzigd
-#define HELDER_STAP      150     // stap per tik (rood feller / wit zachter)
-#define HELDER_MIN       30      // donkerste niveau (%)
-#define HELDER_MAX       700     // felste niveau (%) — uitvoer wordt op 255 begrensd
+#define HELDER_MIN       25      // donkerste (~1%)
+#define HELDER_MAX       640     // felste (standaard-fade bereikt dan 100%)
+#define HELDER_RAMP_STAP 5       // ramp per stap terwijl rood/wit erbij vastgehouden wordt
+#define HELDER_RAMP_MS   30      // tijd per ramp-stap (~3s van min naar max)
 #define HELDER_RESET_MS  30000   // na zo lang uit -> terug naar standaard
 
 Adafruit_NeoPixel pixel(1, PIN_PIXEL, PIXEL_VOLGORDE);
@@ -180,6 +183,7 @@ bool     drieGedaan = false;           // gebaar al getriggerd in deze sessie
 
 // helderheidsniveau (blijft behouden; reset na 30s uit of stroomonderbreking)
 int      helderNiveau = HELDER_DEFAULT;
+uint32_t helderRampMs = 0;     // laatste ramp-stap (blauw + rood/wit vast)
 uint32_t uitSindsMs   = 0;
 
 // adembeweging
@@ -213,7 +217,7 @@ void loop() {
   checkDrieKnops(nu);
   checkCombo(nu);
   checkHold(nu);
-  helderheidAanpassen();   // blauw vast + rood/wit tik = helderheidsniveau regelen
+  helderheidAanpassen(nu); // blauw vast + rood/wit erbij = helderheidsniveau regelen
   checkWitFlits(nu);
   checkTaps(nu);
   willekeurigLus(nu);
@@ -379,7 +383,9 @@ void checkTaps(uint32_t nu) {
       witBezig = false;
       aan = true;                         // hervat (wit kan tijdens de flitsen uit zijn)
       felheid = F_ZACHT;
-      ademNu = ZACHT_MAX;                 // meteen snel terug naar lage sterkte
+      uint8_t mn, mx; huidigBereik(mn, mx);   // fade meteen op de ingestelde standaard
+      if (ademNu > mx) ademNu = mx;
+      else if (ademNu < mn) ademNu = mn;
       kiesNieuwDoel();
     } else if (k.duur < LANG_DREMPEL_MS) { // korte tik
       if (i == ROOD)       kiesKleur(255, 0, 0);
@@ -504,18 +510,25 @@ void willekeurigLus(uint32_t nu) {
   }
 }
 
-// Blauw vasthouden + rood tik = feller, + wit tik = zachter. Blijft behouden.
-void helderheidAanpassen() {
+// Blauw vasthouden: alleen blauw -> rustige 20-50%. Houd je er ook rood of wit
+// bij, dan ramp de standaard-helderheid langzaam omhoog (rood) of omlaag (wit),
+// zichtbaar via de standaard-fade. De ingestelde waarde blijft behouden.
+void helderheidAanpassen(uint32_t nu) {
   if (!knoppen[BLAUW].isHold) return;
-  if (knoppen[ROOD].justDown) {
-    helderNiveau += HELDER_STAP;
-    if (helderNiveau > HELDER_MAX) helderNiveau = HELDER_MAX;
-    knoppen[ROOD].consumed = true;       // geen combo/tik van deze druk
-  }
-  if (knoppen[WIT].justDown) {
-    helderNiveau -= HELDER_STAP;
-    if (helderNiveau < HELDER_MIN) helderNiveau = HELDER_MIN;
-    knoppen[WIT].consumed = true;
+  bool roodVast = knoppen[ROOD].stabiel;
+  bool witVast  = knoppen[WIT].stabiel;
+
+  if (roodVast || witVast) {
+    felheid = F_ZACHT;                       // toon de standaard zodat de ramp zichtbaar is
+    if (roodVast) knoppen[ROOD].consumed = true;
+    if (witVast)  knoppen[WIT].consumed = true;
+    if ((nu - helderRampMs) >= HELDER_RAMP_MS) {
+      helderRampMs = nu;
+      if (roodVast) { helderNiveau += HELDER_RAMP_STAP; if (helderNiveau > HELDER_MAX) helderNiveau = HELDER_MAX; }
+      else          { helderNiveau -= HELDER_RAMP_STAP; if (helderNiveau < HELDER_MIN) helderNiveau = HELDER_MIN; }
+    }
+  } else {
+    felheid = F_BLAUW;                        // alleen blauw vast -> rustige 20-50%
   }
 }
 
