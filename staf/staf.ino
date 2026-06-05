@@ -27,7 +27,8 @@
  * vergrendelde staat geeft een korte zachte witte knippering (150 ms, ~10%) als
  * feedback. Na de juiste code knippert het nog 150 ms wit en gaat dan uit; de
  * eerstvolgende knopdruk is pas een echte opdracht.
- * UITLOGGEN (terug naar vergrendeld): kort op blauw (<=200 ms), dan 3x kort wit.
+ * UITLOGGEN (terug naar vergrendeld): kort op blauw, dan 3x wit (werkt altijd,
+ * ongeacht hoe de lamp brandt; <=2,5 s tussen de stappen).
  *
  * ── BEDIENING ─────────────────────────────────────────────────────────────
  * KORT drukken kiest een kleur (lamp gaat aan en "ademt" zacht en
@@ -100,9 +101,10 @@
 #define CODE_LENGTE       4
 
 // ---- Uitloggen (terug naar vergrendeld) -----------------------------------
-#define LOGOUT_BLAUW_MS    200     // blauw moet zo kort (of korter) zijn
-#define LOGOUT_WIT_AANTAL  3       // daarna zoveel keer kort wit
-#define LOGOUT_WINDOW_MS   1500    // max tijd tussen de stappen, anders reset
+#define LOGOUT_BLAUW_MS    800     // blauw zo kort (ruim genoeg voor een gewone druk;
+                                   // langer = helderheids-hold, telt niet als logout-start)
+#define LOGOUT_WIT_AANTAL  3       // daarna zoveel keer wit
+#define LOGOUT_WINDOW_MS   2500    // max tijd tussen de stappen, anders reset
 
 // ---- Felheidsbereiken {min,max} voor de adembeweging -----------------------
 #define ZACHT_MIN   4     // standaard (schaalt mee met het helderheidsniveau)
@@ -209,6 +211,12 @@ void setup() {
   pixel.begin();
   pixel.clear();
   pixel.show();
+  // Diagnostisch opstart-signaal: 2 korte zachte witte knipperingen. Zie je dit
+  // bij inschakelen, dan is deze firmware geladen. (Mag er later weer uit.)
+  for (uint8_t k = 0; k < 2; k++) {
+    toonRGB(255, 255, 255, 40); delay(120);
+    toonRGB(0, 0, 0, 0);        delay(120);
+  }
   randomSeed(analogRead(0));
 }
 
