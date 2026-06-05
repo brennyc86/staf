@@ -21,12 +21,13 @@
  * "Bootloader branden". Op 1 MHz werkt de NeoPixel NIET betrouwbaar.
  *
  * ── OPSTARTCODE (vergrendeling) ────────────────────────────────────────────
- * Bij opstart is de staf vergrendeld. Code = ROOD, WIT, WIT, BLAUW. Direct na
- * inschakelen mag de code meteen worden ingevoerd. Een foute knop reset de
- * invoer en blokkeert nieuwe invoer tot er 10 s lang geen knop is ingedrukt.
- * Elke druk in vergrendelde staat geeft een korte zachte witte knippering
- * (150 ms, ~10%) als feedback. Na de juiste code knippert het nog 150 ms wit
- * en gaat dan uit; de eerstvolgende knopdruk is pas een echte opdracht.
+ * Bij opstart is de staf vergrendeld. Code = ROOD, WIT, WIT, BLAUW. De code kan
+ * worden ingevoerd zodra er 5 s geen knop is ingedrukt (ook bij opstart). Een
+ * foute knop reset de invoer (dus weer 5 s rust nodig). Elke druk in
+ * vergrendelde staat geeft een korte zachte witte knippering (150 ms, ~10%) als
+ * feedback. Na de juiste code knippert het nog 150 ms wit en gaat dan uit; de
+ * eerstvolgende knopdruk is pas een echte opdracht.
+ * UITLOGGEN (terug naar vergrendeld): kort op blauw (<=200 ms), dan 3x kort wit.
  *
  * ── BEDIENING ─────────────────────────────────────────────────────────────
  * KORT drukken kiest een kleur (lamp gaat aan en "ademt" zacht en
@@ -93,10 +94,15 @@
 #define WILLEKEUR_DOEL_EXTRA 2500  // + willekeurig tot dit erbovenop
 
 // ---- Opstartcode (vergrendeling) ------------------------------------------
-#define CODE_IDLE_MS      10000    // eerst zo lang niks indrukken voor de 1e codeknop telt
+#define CODE_IDLE_MS      5000     // zo lang niks indrukken voor de 1e codeknop telt
 #define CODE_BLINK_MS     150      // duur van de feedback-knippering per druk
 #define CODE_BLINK_HELDER 26       // ~10% wit
 #define CODE_LENGTE       4
+
+// ---- Uitloggen (terug naar vergrendeld) -----------------------------------
+#define LOGOUT_BLAUW_MS    200     // blauw moet zo kort (of korter) zijn
+#define LOGOUT_WIT_AANTAL  3       // daarna zoveel keer kort wit
+#define LOGOUT_WINDOW_MS   1500    // max tijd tussen de stappen, anders reset
 
 // ---- Felheidsbereiken {min,max} voor de adembeweging -----------------------
 #define ZACHT_MIN   4     // standaard (schaalt mee met het helderheidsniveau)
@@ -169,10 +175,13 @@ uint32_t willekeurStapMs = 0;          // laatste kleur-kruipstap
 // opstartcode / vergrendeling
 bool     vergrendeld = true;   // start vergrendeld tot de code klopt
 uint8_t  codePos = 0;          // aantal correcte code-stappen tot nu toe
-bool     codeStraf = false;    // na foute knop: invoer geblokkeerd tot 10s stilte
 bool     codeKlaar = false;    // code net goed: ontgrendel zodra de witte knippering klaar is
-uint32_t laatsteDrukMs = 0;    // moment van laatste knopdruk (voor de 10s-straf)
+uint32_t laatsteDrukMs = 0;    // moment van laatste knopdruk (voor de 5s-inlogrust)
 bool     codeBlink = false;    // feedback-knippering bezig
+
+// uitloggen-gebaar (blauw kort, dan 3x wit)
+uint8_t  logoutPos = 0;        // 0=wacht op blauw, 1..(1+aantal) = voortgang
+uint32_t logoutTijdMs = 0;     // tijdstip laatste stap (voor timeout)
 uint32_t codeBlinkEindMs = 0;
 
 // 3-knops gebaar (sessie = vanaf eerste druk tot alles los)
@@ -212,6 +221,8 @@ void loop() {
     codeBlinkLus(nu);
     return;
   }
+
+  if (checkUitloggen(nu)) return;    // blauw kort + 3x wit -> weer vergrendeld
 
   witWachtAanpassen(nu);   // blauw/rood passen tijdens wit-flitsen de rust aan
   checkDrieKnops(nu);
@@ -281,7 +292,7 @@ uint8_t aantalIn() {
   return n;
 }
 
-// Opstartcode invoeren: rood-wit-wit-blauw, eerste knop pas na >=10s rust.
+// Opstartcode invoeren: rood-wit-wit-blauw. De 1e knop telt pas na >=5s rust.
 // Elke druk geeft een korte zachte witte feedback-knippering.
 void codeInvoer(uint32_t nu) {
   if (codeKlaar) return;                       // code al goed; wacht tot de knippering uit is
@@ -292,26 +303,59 @@ void codeInvoer(uint32_t nu) {
     codeBlinkEindMs = nu + CODE_BLINK_MS;
     toonRGB(255, 255, 255, CODE_BLINK_HELDER);
 
-    uint32_t gap = nu - laatsteDrukMs;                     // rust sinds vorige druk
+    uint32_t gap = nu - laatsteDrukMs;         // rust sinds vorige druk
     laatsteDrukMs = nu;
-    if (codeStraf && gap >= CODE_IDLE_MS) codeStraf = false; // 10s stilte -> straf voorbij
-
-    if (codeStraf) continue;                               // straf actief: nog niks invoeren (wel feedback)
 
     if (codePos == 0) {
-      if (i == code[0]) codePos = 1;                       // juiste start (mag direct na opstart)
-      else              codeStraf = true;                  // foute eerste knop -> 10s straf
+      codePos = (gap >= CODE_IDLE_MS && i == code[0]) ? 1 : 0;  // 1e knop pas na 5s rust
     } else if (i == code[codePos]) {
       codePos++;
-      if (codePos >= CODE_LENGTE) {                        // code goed: knippering nog laten aflopen
+      if (codePos >= CODE_LENGTE) {            // code goed: knippering nog laten aflopen
         codePos = 0;
-        codeKlaar = true;                                  // ontgrendelen gebeurt in codeBlinkLus
+        codeKlaar = true;                      // ontgrendelen gebeurt in codeBlinkLus
       }
     } else {
-      codePos = 0;                                         // fout -> opnieuw, met 10s straf
-      codeStraf = true;
+      codePos = 0;                             // fout -> opnieuw (weer 5s rust nodig)
     }
   }
+}
+
+// Zet de staf terug in vergrendelde staat (uitloggen).
+void uitloggen(uint32_t nu) {
+  vergrendeld = true;
+  codePos = 0;
+  codeKlaar = false;
+  codeBlink = false;
+  aan = false;
+  willekeurig = false;
+  witBezig = false;
+  ademNu = 0;
+  helderNiveau = HELDER_DEFAULT;     // schone lei voor de volgende sessie
+  logoutPos = 0;
+  laatsteDrukMs = nu;                // start de 5s-teller voor opnieuw inloggen
+  for (uint8_t i = 0; i < 3; i++) { knoppen[i].isHold = false; knoppen[i].consumed = false; knoppen[i].taps = 0; }
+  toonRGB(0, 0, 0, 0);              // lamp uit
+}
+
+// Uitlog-gebaar: blauw kort (<=200ms), daarna 3x kort wit -> vergrendeld.
+bool checkUitloggen(uint32_t nu) {
+  if (logoutPos > 0 && (nu - logoutTijdMs) > LOGOUT_WINDOW_MS) logoutPos = 0;  // te traag -> reset
+
+  for (uint8_t i = 0; i < 3; i++) {
+    if (!knoppen[i].justUp) continue;
+
+    if (i == BLAUW) {
+      if (knoppen[i].duur <= LOGOUT_BLAUW_MS) { logoutPos = 1; logoutTijdMs = nu; }
+      else logoutPos = 0;
+    } else if (i == WIT && logoutPos >= 1) {
+      logoutPos++;
+      logoutTijdMs = nu;
+      if (logoutPos >= 1 + LOGOUT_WIT_AANTAL) { uitloggen(nu); return true; }
+    } else {
+      logoutPos = 0;                 // rood, of wit zonder voorafgaand blauw -> reset
+    }
+  }
+  return false;
 }
 
 void codeBlinkLus(uint32_t nu) {
